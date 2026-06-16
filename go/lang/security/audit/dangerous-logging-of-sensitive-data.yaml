@@ -1,105 +1,165 @@
 rules:
-  - id: go.security.audit.dangerous-logging-sensitive-var
-    message: "Logging sensitive variables (e.g., password, token, secretKey) may expose secrets."
+  - id: go.security.audit.dangerous-logging-sensitive-data
+    message: >-
+      Potentially sensitive data flows into a log statement. Avoid logging
+      request/response bodies, headers, credentials, tokens, secrets, or raw HTTP
+      dumps; log explicit safe fields or redact before logging.
     severity: WARNING
-    languages: [go]
+    languages:
+      - go
+    mode: taint
     metadata:
       category: security
-      technology: go
-      cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
-      owasp: ["A03:2021 - Sensitive Data Exposure"]
+      subcategory:
+        - audit
+      technology:
+        - go
+      cwe:
+        - "CWE-532: Insertion of Sensitive Information into Log File"
+      owasp:
+        - "A09:2021 - Security Logging and Monitoring Failures"
+        - "A09:2025 - Security Logging & Alerting Failures"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://cwe.mitre.org/data/definitions/532.html
+        - https://github.com/rancher/rancher/security/advisories/GHSA-xfj7-qf8w-2gcr
+        - https://github.com/neuvector/manager/security/advisories/GHSA-fggw-hv56-8m6r
+        - https://github.com/neuvector/manager/security/advisories/GHSA-hx45-873x-74qv
+    pattern-sources:
+      - patterns:
+          - pattern: os.Getenv($KEY)
+          - metavariable-regex:
+              metavariable: $KEY
+              regex: '(?i)"[^"]*(pass(word)?|pwd|secret|token|credential|api[_-]?key|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|session|cookie|authorization|bearer|pat|kubeconfig|aws|gcp|azure)[^"]*"'
+      - patterns:
+          - pattern-either:
+              - pattern: $REQ.Header.Get($KEY)
+              - pattern: $REQ.Header[$KEY]
+              - pattern: $RESP.Header.Get($KEY)
+              - pattern: $RESP.Header[$KEY]
+          - metavariable-regex:
+              metavariable: $KEY
+              regex: '(?i)"(authorization|proxy-authorization|cookie|set-cookie|x-r-sess|x-api-key|x-api-auth-header|x-api-set-cookie-header|x-amz-security-token)"'
+      - pattern-either:
+          - pattern: $REQ.Header
+          - pattern: $REQ.Headers
+          - pattern: $RESP.Header
+          - pattern: $RESP.Headers
+          - pattern: io.ReadAll($REQ.Body)
+          - pattern: io.ReadAll($RESP.Body)
+          - pattern: ioutil.ReadAll($REQ.Body)
+          - pattern: ioutil.ReadAll($RESP.Body)
+          - pattern: httputil.DumpRequest($REQ, true)
+          - pattern: httputil.DumpRequestOut($REQ, true)
+          - pattern: httputil.DumpResponse($RESP, true)
+      - patterns:
+          - pattern: $OBJ
+          - metavariable-regex:
+              metavariable: $OBJ
+              regex: '(?i)^(?!(secretName|.*Name$|.*Namespace$|.*Path$)).*(secret|secretList|kubeconfig|kubeConfig|restConfig|credential|credentials|cloudCredential|authProvider|registrationCommand|registerCommand|requestBody|responseBody|rawBody|bodyBytes|payload|headers|dump).*$'
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: redact(...)
+          - pattern: redacted(...)
+          - pattern: mask(...)
+          - pattern: masked(...)
+          - pattern: sanitize(...)
+          - pattern: sanitizeLog(...)
+          - pattern: sanitizeForLog(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: log.$F(..., $SINK, ...)
+              - pattern: fmt.$F(..., $SINK, ...)
+              - pattern: $LOGGER.$F(..., $SINK, ...)
+          - metavariable-regex:
+              metavariable: $F
+              regex: '(?i)^(print|printf|println|debug|debugf|info|infof|warn|warnf|warning|warningf|error|errorf|fatal|fatalf|panic|panicf|trace|tracef|msg|msgf)$'
+      - pattern-either:
+          - pattern: zap.Any($KEY, $SINK)
+          - pattern: zap.String($KEY, $SINK)
+          - pattern: zap.ByteString($KEY, $SINK)
+          - pattern: zap.Binary($KEY, $SINK)
+          - pattern: slog.Any($KEY, $SINK)
+          - pattern: slog.String($KEY, $SINK)
+          - pattern: logrus.WithField($KEY, $SINK)
+          - pattern: $LOGGER.WithField($KEY, $SINK)
+          - pattern: $LOGGER.Str($KEY, $SINK)
+          - pattern: $LOGGER.Bytes($KEY, $SINK)
+          - pattern: $LOGGER.Interface($KEY, $SINK)
+          - pattern: $LOGGER.Any($KEY, $SINK)
+
+  - id: go.security.audit.dangerous-logging-sensitive-argument
+    message: >-
+      A value with a sensitive-looking name is being logged. This may expose
+      credentials, tokens, secrets, cookies, private keys, or session data.
+    severity: WARNING
+    languages:
+      - go
+    metadata:
+      category: security
+      subcategory:
+        - audit
+      technology:
+        - go
+      cwe:
+        - "CWE-532: Insertion of Sensitive Information into Log File"
+      owasp:
+        - "A09:2021 - Security Logging and Monitoring Failures"
+        - "A09:2025 - Security Logging & Alerting Failures"
+      confidence: LOW
+      likelihood: LOW
+      impact: MEDIUM
       references:
         - https://cwe.mitre.org/data/definitions/532.html
     patterns:
       - pattern-either:
-          - pattern: log.$F(..., $VAR, ...)
-          - pattern: fmt.$F(..., $VAR, ...)
-          - pattern: logrus.$F(..., $VAR, ...)
-          - pattern: $X.$F(..., $VAR, ...)
-          - pattern: slog.$F(..., $VAR, ...)
-          - pattern: klog.$F(..., $VAR, ...)
+          - pattern: log.$F(..., $VALUE, ...)
+          - pattern: fmt.$F(..., $VALUE, ...)
+          - pattern: $LOGGER.$F(..., $VALUE, ...)
       - metavariable-regex:
           metavariable: $F
-          regex: '(?i)^(print|printf|println|fatal|fatalln|panic|panicln|info|infof|warn|warnf|warning|warningf|error|errorf|debug|debugf|trace|tracef|msg|msgf)$'
+          regex: '(?i)^(print|printf|println|debug|debugf|info|infof|warn|warnf|warning|warningf|error|errorf|fatal|fatalf|panic|panicf|trace|tracef|msg|msgf)$'
       - metavariable-regex:
-          metavariable: $VAR
-          regex: '(?i)(?!(secretName|secretNs|.*Name$|.*Namespace$|.*Path$))(pass(word|wd)?|secret|token|api[_-]?key|access[_-]?token|refresh[_-]?token|auth(_?token|_?key)?|client(_?secret|_?id)?|private[_-]?key|secret[_-]?key(_?base)?|hmac|jwt(_?secret|_?key)?|session(_?key|_?token)?|cookie(_?secret|_?key)?|master[_-]?key|vault(_?token|_?key)?|ssh(_?key|_?passphrase)?|tls(_?key|_?cert)?|db(_?pass(word)?|_?uri|_?url)|connection(_?string|_?uri)|s3(_?secret|_?key|_?access[_-]?key[_-]?id|_?secret[_-]?access[_-]?key)|aws(_?secret(_?access)?[_-]?key|_?access[_-]?key[_-]?id)|gcp(_?key|_?service[_-]?account)|google(_?credentials)?|azure(_?client[_-]?secret)?|slack(_?token|_?webhook)|webhook(_?secret)?|stripe(_?secret|_?key)|paypal(_?secret)?|twilio(_?auth(_?token)?)|otp(_?secret|_?key)|twofactor(_?secret)?|encryption(_?key)|enc(_?key)?|creds?|credentials|bearer[_-]?token|personal[_-]?access[_-]?token|pat|kube(_?token|_?secret)|sentry[_-]?dsn)'
+          metavariable: $VALUE
+          regex: '(?i)^(?!(secretName|.*Name$|.*Namespace$|.*Path$)).*(pass(word)?|pwd|secret|token|credential|credentials|apiKey|api[_-]?key|privateKey|private[_-]?key|clientSecret|client[_-]?secret|accessToken|access[_-]?token|refreshToken|refresh[_-]?token|session|cookie|authorization|bearer|personalAccessToken|personal[_-]?access[_-]?token|pat|kubeconfig|kubeConfig).*$'
 
-  - id: go.security.audit.dangerous-logging-field-key
-    message: "Logging with sensitive field keys (e.g., 'password', 'token') may expose secrets."
+  - id: go.security.audit.dangerous-logging-sensitive-field-key
+    message: >-
+      A sensitive-looking structured log key is being logged. This may expose
+      credentials, tokens, secrets, cookies, private keys, or session data.
     severity: WARNING
-    languages: [go]
+    languages:
+      - go
     metadata:
       category: security
-      technology: go
-      cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
-      owasp: ["A03:2021 - Sensitive Data Exposure"]
+      subcategory:
+        - audit
+      technology:
+        - go
+      cwe:
+        - "CWE-532: Insertion of Sensitive Information into Log File"
+      owasp:
+        - "A09:2021 - Security Logging and Monitoring Failures"
+        - "A09:2025 - Security Logging & Alerting Failures"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
       references:
         - https://cwe.mitre.org/data/definitions/532.html
     patterns:
       - pattern-either:
-          - pattern: $X.WithField($KEY, $VAL).$F(...)
-          - pattern: '$X.WithFields(map[$K]$V{ $KEY: $VAL, ...}).$F(...)'
-          - pattern: zap.$FIELD($KEY, $VAL)
-          - pattern: $X.$F(..., zap.$FIELD($KEY, $VAL), ...)
-          - pattern: slog.$FIELD($KEY, $VAL)
-          - pattern: $X.$F(..., slog.$FIELD($KEY, $VAL), ...)
-          - pattern: $X.$FIELD($KEY, $VAL).$F(...)
-          - pattern: klog.$F($MSG, $KEY, $VAL, ...)
-          - pattern: $X.WithValues($KEY, $VAL, ...).$F(...)
-          - pattern: $X.Log($KEY, $VAL, ...)
+          - pattern: zap.$FIELD($KEY, $VALUE)
+          - pattern: slog.$FIELD($KEY, $VALUE)
+          - pattern: logrus.WithField($KEY, $VALUE)
+          - pattern: $LOGGER.WithField($KEY, $VALUE)
+          - pattern: $LOGGER.Str($KEY, $VALUE)
+          - pattern: $LOGGER.Bytes($KEY, $VALUE)
+          - pattern: $LOGGER.Interface($KEY, $VALUE)
+          - pattern: $LOGGER.Any($KEY, $VALUE)
+          - pattern: $LOGGER.WithValues($KEY, $VALUE, ...)
       - metavariable-regex:
           metavariable: $KEY
-          regex: '(?i)"(?:pass(word|wd)?|secret|token|api[_-]?key|access[_-]?token|refresh[_-]?token|auth(_?token|_?key)?|client(_?secret|_?id)?|private[_-]?key|secret[_-]?key(_?base)?|hmac|jwt(_?secret|_?key)?|session(_?key|_?token)?|cookie(_?secret|_?key)?|master[_-]?key|vault(_?token|_?key)?|ssh(_?key|_?passphrase)?|tls(_?key|_?cert)?|db(_?pass(word)?|_?uri|_?url)|connection(_?string|_?uri)|s3(_?secret|_?key|_?access[_-]?key[_-]?id|_?secret[_-]?access[_-]?key)|aws(_?secret(_?access)?[_-]?key|_?access[_-]?key[_-]?id)|gcp(_?key|_?service[_-]?account)|google(_?credentials)?|azure(_?client[_-]?secret)?|slack(_?token|_?webhook)|webhook(_?secret)?|stripe(_?secret|_?key)|paypal(_?secret)?|twilio(_?auth(_?token)?)|otp(_?secret|_?key)|twofactor(_?secret)?|encryption(_?key)|enc(_?key)?|creds?|credentials|bearer[_-]?token|personal[_-]?access[_-]?token|pat|kube(_?token|_?secret)|sentry[_-]?dsn)"'
-  - id: go.security.audit.dangerous-logging-format-string
-    message: "Sensitive variables are interpolated into log messages; this may expose secrets."
-    severity: WARNING
-    languages: [go]
-    metadata:
-      category: security
-      technology: go
-      cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
-      owasp: ["A03:2021 - Sensitive Data Exposure"]
-      references:
-        - https://cwe.mitre.org/data/definitions/532.html
-    patterns:
-      - pattern-either:
-          - pattern: log.$LF(..., fmt.Sprintf($FMT, ..., $VAR, ...), ...)
-          - pattern: fmt.$LF($FMT, ..., $VAR, ...)
-          - pattern: logrus.$LF($FMT, ..., $VAR, ...)
-          - pattern: $X.$LF($FMT, ..., $VAR, ...)
-          - pattern: slog.$LF($FMT, ..., $VAR, ...)
-          - pattern: klog.$LF($FMT, ..., $VAR, ...)
-      - metavariable-regex:
-          metavariable: $LF
-          regex: '(?i)^(print|printf|println|fatal|fatalln|panic|panicln|info|infof|warn|warnf|warning|warningf|error|errorf|debug|debugf|trace|tracef|msg|msgf)$'
-      - metavariable-regex:
-          metavariable: $VAR
-          regex: '(?i)(?!(secretName|secretNs|.*Name$|.*Namespace$|.*Path$))(pass(word|wd)?|secret|token|api[_-]?key|access[_-]?token|refresh[_-]?token|auth(_?token|_?key)?|client(_?secret|_?id)?|private[_-]?key|secret[_-]?key(_?base)?|hmac|jwt(_?secret|_?key)?|session(_?key|_?token)?|cookie(_?secret|_?key)?|master[_-]?key|vault(_?token|_?key)?|ssh(_?key|_?passphrase)?|tls(_?key|_?cert)?|db(_?pass(word)?|_?uri|_?url)|connection(_?string|_?uri)|s3(_?secret|_?key|_?access[_-]?key[_-]?id|_?secret[_-]?access[_-]?key)|aws(_?secret(_?access)?[_-]?key|_?access[_-]?key[_-]?id)|gcp(_?key|_?service[_-]?account)|google(_?credentials)?|azure(_?client[_-]?secret)?|slack(_?token|_?webhook)|webhook(_?secret)?|stripe(_?secret|_?key)|paypal(_?secret)?|twilio(_?auth(_?token)?)|otp(_?secret|_?key)|twofactor(_?secret)?|encryption(_?key)|enc(_?key)?|creds?|credentials|bearer[_-]?token|personal[_-]?access[_-]?token|pat|kube(_?token|_?secret)|sentry[_-]?dsn)'
-
-  - id: go.security.audit.dangerous-logging-env
-    message: "Environment variable with a sensitive key is being logged."
-    severity: WARNING
-    languages: [go]
-    metadata:
-      category: security
-      technology: go
-      cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
-      owasp: ["A03:2021 - Sensitive Data Exposure"]
-      references:
-        - https://cwe.mitre.org/data/definitions/532.html
-    patterns:
-      - pattern-either:
-          - pattern: log.$F(..., os.Getenv($KEY), ...)
-          - pattern: fmt.$F(..., os.Getenv($KEY), ...)
-          - pattern: logrus.$F(..., os.Getenv($KEY), ...)
-          - pattern: $X.$F(..., os.Getenv($KEY), ...)
-          - pattern: slog.$F(..., os.Getenv($KEY), ...)
-          - pattern: klog.$F(..., os.Getenv($KEY), ...)
-          - pattern: $X.$F(..., func(){ $V, $OK := os.LookupEnv($KEY); return $V }(), ...)
-      - metavariable-regex:
-          metavariable: $F
-          regex: '(?i)^(print|printf|println|fatal|fatalln|panic|panicln|info|infof|warn|warnf|warning|warningf|error|errorf|debug|debugf|trace|tracef|msg|msgf)$'
-      - metavariable-regex:
-          metavariable: $KEY
-          regex: '(?i)"(?:[A-Z0-9_]*)(PASSWORD|PASS|PWD|SECRET|TOKEN|API[_-]?KEY|ACCESS[_-]?TOKEN|CLIENT[_-]?SECRET|PRIVATE[_-]?KEY|SECRET[_-]?KEY|HMAC|JWT(_?SECRET|_?KEY)?|SESSION(_?KEY|_?TOKEN)?|COOKIE(_?SECRET|_?KEY)?|MASTER[_-]?KEY|VAULT(_?TOKEN|_?KEY)?|SSH(_?KEY|_?PASSPHRASE)?|TLS(_?KEY|_?CERT)?|DB(_?PASS|_?PASSWORD|_?URI|_?URL)|CONNECTION(_?STRING|_?URI)|S3(_?SECRET|_?KEY|_?ACCESS[_-]?KEY[_-]?ID|_?SECRET[_-]?ACCESS[_-]?KEY)|AWS(_?SECRET(_?ACCESS)?[_-]?KEY|_?ACCESS[_-]?KEY[_-]?ID)|GCP(_?KEY|_?SERVICE[_-]?ACCOUNT)|GOOGLE(_?CREDENTIALS)?|AZURE(_?CLIENT[_-]?SECRET)?|SLACK(_?TOKEN|_?WEBHOOK)?|WEBHOOK(_?SECRET)?|STRIPE(_?SECRET|_?KEY)?|PAYPAL(_?SECRET)?|TWILIO(_?AUTH(_?TOKEN)?)|OTP(_?SECRET|_?KEY)?|TWOFACTOR(_?SECRET)?|ENCRYPTION(_?KEY)|ENC(_?KEY)?|CREDENTIALS?|CREDS?|BEARER[_-]?TOKEN|PERSONAL[_-]?ACCESS[_-]?TOKEN|PAT|KUBE(_?TOKEN|_?SECRET)|SENTRY[_-]?DSN)"'
+          regex: '(?i)"[^"]*(pass(word)?|pwd|secret|token|credential|credentials|api[_-]?key|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|session|cookie|authorization|bearer|personal[_-]?access[_-]?token|pat|kubeconfig|x-r-sess|x-api-key|applicationSecret|oauthCredential|serviceAccountCredential|spKey|spCert)[^"]*"'
